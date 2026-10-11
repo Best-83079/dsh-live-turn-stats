@@ -26,16 +26,22 @@
  * attempt's compact timed stream (`assistant/message.stream`), which is what
  * keeps TTFT correct after a reload — when the transient rows are gone.
  *
- * The bundle imports nothing but `react`: every other value comes from a Cordis
- * service (`slots`, `sessions`, `locale`) resolved at runtime, so a renamed or
- * absent Harness package degrades this pill instead of breaking the client
- * module table.
+ * The pill is a button: clicking it opens the shipped stat dialog's own
+ * presentation — a fixed, viewport-clamped panel anchored above the trigger,
+ * dismissed by an outside press or Escape — carrying the same `dl` rows the
+ * session-average dialog uses.
+ *
+ * The bundle imports nothing but `react` and `react-dom` (both platform seed
+ * words): every other value comes from a Cordis service (`slots`, `sessions`,
+ * `locale`) resolved at runtime, so a renamed or absent Harness package degrades
+ * this pill instead of breaking the client module table.
  */
 
 window.__ModuleLoader__.load({
 	id: 'dsh-live-turn-stats',
 	factory(require) {
 		const React = require('react');
+		const ReactDOM = require('react-dom');
 		const h = React.createElement;
 
 		/** Client locale namespace owned by this bundle. */
@@ -44,6 +50,8 @@ window.__ModuleLoader__.load({
 		/** Readable keys double as the English fallback text. */
 		const EN = {
 			'Turn': 'Turn',
+			'Turn {turn}': 'Turn {turn}',
+			'Latest turn stats': 'Latest turn stats',
 			'waiting for first token': 'waiting for first token',
 			'generating': 'generating',
 			'{seconds}s': '{seconds}s',
@@ -61,6 +69,8 @@ window.__ModuleLoader__.load({
 
 		const ZH = {
 			'Turn': '本轮',
+			'Turn {turn}': '第 {turn} 轮',
+			'Latest turn stats': '最新一轮统计',
 			'waiting for first token': '等待首字',
 			'generating': '生成中',
 			'{seconds}s': '{seconds}秒',
@@ -76,24 +86,39 @@ window.__ModuleLoader__.load({
 			'This pill needs the Session event window (ctx.sessions), which this client does not provide.': '这个胶囊需要会话事件窗口（ctx.sessions），当前客户端没有提供。',
 		};
 
+		/** Distance between the trigger and its panel. */
+		const PANEL_GAP = 8;
+		/** Smallest distance the panel keeps from the viewport edges. */
+		const PANEL_MARGIN = 12;
+
 		/**
-		 * Pill geometry: the shipped stats pill's row metrics, so the two sit on one
-		 * line. Theme tokens only, so light and dark follow the host.
-		 * @param pending - whether a live figure is still being counted up.
-		 * @returns the pill's inline style.
+		 * Unplaced panel: laid out but invisible, so the first pass can measure its
+		 * real size before it is placed (the shipped dialog's measure pass).
 		 */
-		function pillStyle(pending) {
+		const MEASURE_STYLE = { visibility: 'hidden', left: 0, top: 0 };
+
+		/**
+		 * Trigger geometry: the shipped stats pill's row metrics, so the two sit on
+		 * one line, plus the shipped trigger's hover/expanded treatment.
+		 * @param active - hovered, focused, or expanded.
+		 * @param live - whether a figure is still being counted up.
+		 * @returns the trigger's inline style.
+		 */
+		function triggerStyle(active, live) {
 			return {
 				boxSizing: 'border-box',
 				minWidth: 0,
 				maxWidth: '100%',
-				color: pending ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
+				color: active || live ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))',
+				background: active ? 'var(--dsw-alias-interactive-bg-hover, transparent)' : 'transparent',
 				font: 'inherit',
 				fontSize: 'calc(var(--dsh-content-font-size-secondary, 13px) - 1px)',
 				lineHeight: 'calc(20px + var(--dsh-content-font-delta-secondary, 0px))',
 				fontVariantNumeric: 'tabular-nums',
 				whiteSpace: 'nowrap',
+				border: 'none',
 				borderRadius: 999,
+				cursor: 'pointer',
 				display: 'inline-flex',
 				alignItems: 'center',
 				gap: 6,
@@ -101,8 +126,64 @@ window.__ModuleLoader__.load({
 			};
 		}
 
-		/** Label geometry: the pill clips a long figure instead of widening the row. */
+		/** Panel chrome: the shipped stat dialog's surface, spacing, and type scale. */
+		const PANEL_STYLE = {
+			position: 'fixed',
+			zIndex: 1100,
+			boxSizing: 'border-box',
+			width: 'max-content',
+			minWidth: 'min(300px, 100vw - 24px)',
+			maxWidth: 'min(440px, 100vw - 24px)',
+			borderRadius: 'var(--dsw-radius-lg, 12px)',
+			background: 'var(--dsw-specific-menu, var(--dsw-alias-bg-overlay))',
+			backdropFilter: 'var(--dsw-menu-backdrop-filter, none)',
+			boxShadow: 'var(--dsw-elevation-prominent, 0 8px 28px rgba(0, 0, 0, .18))',
+			color: 'var(--dsw-alias-label-secondary)',
+			cursor: 'default',
+			border: 'none',
+			padding: 16,
+			fontSize: 12,
+			lineHeight: '18px',
+		};
+		/** Title row: primary text on the left, the Turn number on the right. */
+		const PANEL_TITLE_STYLE = {
+			color: 'var(--dsw-alias-label-primary)',
+			display: 'flex',
+			justifyContent: 'space-between',
+			gap: 16,
+			marginBottom: 8,
+			fontWeight: 500,
+		};
+		const PANEL_TITLE_LABEL_STYLE = { display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 };
+		const PANEL_TITLE_VALUE_STYLE = { fontVariantNumeric: 'tabular-nums' };
+		/** Hairline between the title and the figures, as shipped. */
+		const PANEL_RULE_STYLE = { borderTop: '0.5px solid var(--dsw-alias-border-l2)', marginBottom: 10 };
+		const PANEL_DETAILS_STYLE = {
+			display: 'grid',
+			gridTemplateColumns: 'minmax(76px, auto) minmax(0, 1fr)',
+			gap: '6px 16px',
+			margin: 0,
+			color: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))',
+		};
+		const PANEL_TERM_STYLE = { minWidth: 0, margin: 0 };
+		const PANEL_VALUE_STYLE = {
+			minWidth: 0,
+			margin: 0,
+			color: 'var(--dsw-alias-label-secondary)',
+			fontVariantNumeric: 'tabular-nums',
+			textAlign: 'right',
+		};
+		const PANEL_NOTE_STYLE = { marginTop: 10, color: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))' };
+
+		/** Label geometry: the trigger clips a long figure instead of widening the row. */
 		const LABEL_STYLE = { textOverflow: 'ellipsis', minWidth: 0, overflow: 'hidden' };
+
+		/** The trigger's and the panel title's glyph, inheriting the text color. */
+		function ClockIcon() {
+			return h('svg', { viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': true, style: { flex: 'none' } },
+				h('circle', { cx: 8, cy: 8, r: 5.75, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 }),
+				h('path', { d: 'M8 4.75V8.4l2.5 1.6', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }));
+		}
 
 		//#region The newest Turn's live figures
 		/**
@@ -410,6 +491,132 @@ window.__ModuleLoader__.load({
 			const value = clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10);
 			return t('{tps} tok/s', { tps: value });
 		}
+
+		/**
+		 * Exact token count with thousands separators: the panel shows exact
+		 * figures, so grouping never hides a digit that changed.
+		 * @param value - token count.
+		 * @returns grouped digits.
+		 */
+		function formatCount(value) {
+			return String(Math.max(0, Math.round(value))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+		}
+
+		/**
+		 * Every string one summary contributes, resolved at one instant, so the
+		 * trigger and the panel cannot disagree and their live rows tick together.
+		 * @param summary - folded newest-Turn figures.
+		 * @param now - wall clock, used only for the live elapsed figures.
+		 * @param t - translate seat.
+		 * @returns display-ready figures, the trigger label among them.
+		 */
+		function displayFigures(summary, now, t) {
+			const elapsed = (from) => formatSeconds(Math.max(0, now - (typeof from === 'number' ? from : now)), t);
+			const ttftText = summary.ttftMs === null ? null : formatSeconds(summary.ttftMs, t);
+			const speedText = summary.tps === null ? null : formatSpeed(summary.tps, t);
+			const live = summary.pending === 'awaiting'
+				? `${t('waiting for first token')} ${elapsed(summary.awaitingSince)}`
+				: summary.pending === 'generating'
+					? `${t('generating')} ${elapsed(summary.firstTokenAt)}`
+					: null;
+			const detail = live ?? speedText;
+			return {
+				ttftText,
+				speedText,
+				live,
+				label: `${t('Turn')} ${[ttftText, detail].filter((part) => part !== null).join(' · ')}`,
+				rows: [
+					{ label: t('First token (TTFT)'), value: summary.pending === 'awaiting' ? live : ttftText ?? t('not recorded') },
+					{ label: t('Output speed (TPS)'), value: summary.pending === 'generating' ? live : speedText ?? t('not recorded') },
+					{ label: t('Output tokens'), value: summary.tokenSteps === 0 ? t('not recorded') : formatCount(summary.decodeTokens) },
+					{ label: t('Decode time'), value: summary.decodeMs > 0 ? formatSeconds(summary.decodeMs, t) : t('not recorded') },
+					{ label: t('Steps'), value: String(summary.steps) },
+				],
+			};
+		}
+
+		/**
+		 * Place a fixed panel above its trigger, clamped into the viewport, and keep
+		 * it there while the page scrolls or the window resizes — the shipped stat
+		 * dialog's own anchoring, without its primitives package.
+		 * @param open - whether the panel is mounted.
+		 * @param anchorRef - ref of the trigger.
+		 * @param panelRef - ref of the panel.
+		 * @returns the placement, or null while the measuring pass runs.
+		 */
+		function useAnchoredPanel(open, anchorRef, panelRef) {
+			const [pos, setPos] = React.useState(null);
+			React.useLayoutEffect(() => {
+				if (!open) {
+					setPos(null);
+					return undefined;
+				}
+				let frame = 0;
+				const place = () => {
+					const anchor = anchorRef.current;
+					const panel = panelRef.current;
+					if (anchor === null || panel === null) return;
+					const trigger = anchor.getBoundingClientRect();
+					const rect = panel.getBoundingClientRect();
+					const width = Math.min(rect.width, window.innerWidth - PANEL_MARGIN * 2);
+					const left = Math.min(
+						Math.max(trigger.left + trigger.width / 2 - width / 2, PANEL_MARGIN),
+						Math.max(PANEL_MARGIN, window.innerWidth - width - PANEL_MARGIN),
+					);
+					const above = trigger.top - rect.height - PANEL_GAP;
+					const below = trigger.bottom + PANEL_GAP;
+					const top = above >= PANEL_MARGIN
+						? above
+						: below + rect.height + PANEL_MARGIN <= window.innerHeight
+							? below
+							: Math.max(PANEL_MARGIN, window.innerHeight - rect.height - PANEL_MARGIN);
+					setPos({ left: Math.round(left), top: Math.round(top) });
+				};
+				place();
+				const onViewportChange = () => {
+					window.cancelAnimationFrame(frame);
+					frame = window.requestAnimationFrame(place);
+				};
+				window.addEventListener('resize', onViewportChange);
+				window.addEventListener('scroll', onViewportChange, true);
+				return () => {
+					window.cancelAnimationFrame(frame);
+					window.removeEventListener('resize', onViewportChange);
+					window.removeEventListener('scroll', onViewportChange, true);
+				};
+			}, [open, anchorRef, panelRef]);
+			return pos;
+		}
+
+		/**
+		 * Close the panel on an outside pointer press or Escape. The trigger is
+		 * exempt, so its own click stays a toggle rather than a close-then-open.
+		 * @param open - whether the panel is mounted.
+		 * @param rootRef - ref of the trigger.
+		 * @param panelRef - ref of the panel.
+		 * @param setOpen - open-state writer.
+		 */
+		function useDismiss(open, rootRef, panelRef, setOpen) {
+			React.useEffect(() => {
+				if (!open) return undefined;
+				const onPointerDown = (event) => {
+					const target = event.target;
+					const insidePanel = target instanceof Node && panelRef.current !== null && panelRef.current.contains(target);
+					const insideTrigger = target instanceof Node && rootRef.current !== null && rootRef.current.contains(target);
+					if (insidePanel || insideTrigger) return;
+					setOpen(false);
+				};
+				const onKeyDown = (event) => {
+					if (event.key === 'Escape') setOpen(false);
+				};
+				document.addEventListener('pointerdown', onPointerDown, true);
+				document.addEventListener('keydown', onKeyDown);
+				return () => {
+					document.removeEventListener('pointerdown', onPointerDown, true);
+					document.removeEventListener('keydown', onKeyDown);
+				};
+			}, [open, rootRef, panelRef, setOpen]);
+		}
 		//#endregion
 
 		return {
@@ -471,7 +678,8 @@ window.__ModuleLoader__.load({
 
 				/**
 				 * The pill. It renders nothing until the newest Turn has something to
-				 * say, and counts a live wait or generation up once per second.
+				 * say, counts a live wait or generation up once per second, and opens
+				 * its detail panel on click.
 				 */
 				function LiveTurnPill({ sessionId, t }) {
 					const tr = typeof t === 'function' ? t : translate;
@@ -493,38 +701,60 @@ window.__ModuleLoader__.load({
 						const timer = setInterval(() => setNow(Date.now()), 1000);
 						return () => clearInterval(timer);
 					}, [pending, summary === null ? null : summary.turn]);
+					const [open, setOpen] = React.useState(false);
+					const [hovered, setHovered] = React.useState(false);
+					const [focused, setFocused] = React.useState(false);
+					const rootRef = React.useRef(null);
+					const panelRef = React.useRef(null);
+					const pos = useAnchoredPanel(open, rootRef, panelRef);
+					useDismiss(open, rootRef, panelRef, setOpen);
+					const hasSummary = summary !== null;
+					React.useEffect(() => {
+						if (!hasSummary && open) setOpen(false);
+					}, [hasSummary, open]);
 					if (summary === null) return null;
 
-					const elapsed = (from) => formatSeconds(Math.max(0, now - (typeof from === 'number' ? from : now)), tr);
-					const ttftText = summary.ttftMs === null ? null : formatSeconds(summary.ttftMs, tr);
-					const speedText = summary.tps === null ? null : formatSpeed(summary.tps, tr);
-					const detail = summary.pending === 'awaiting'
-						? `${tr('waiting for first token')} ${elapsed(summary.awaitingSince)}`
-						: summary.pending === 'generating'
-							? `${tr('generating')} ${elapsed(summary.firstTokenAt)}`
-							: speedText;
-					const parts = [ttftText, detail].filter((part) => part !== null);
-					const label = `${tr('Turn')} ${parts.join(' · ')}`;
-					const title = [
-						tr('Latest turn only — the neighbouring pill averages the whole session.'),
-						`${tr('First token (TTFT)')}: ${ttftText ?? tr('not recorded')}`,
-						`${tr('Output speed (TPS)')}: ${speedText ?? tr('not recorded')}`,
-						`${tr('Output tokens')}: ${summary.tokenSteps === 0 ? tr('not recorded') : summary.decodeTokens}`,
-						`${tr('Decode time')}: ${summary.decodeMs > 0 ? formatSeconds(summary.decodeMs, tr) : tr('not recorded')}`,
-						`${tr('Steps')}: ${summary.steps}`,
-					].join('\n');
-
-					return h('span', {
-						style: pillStyle(summary.pending !== null),
+					const figures = displayFigures(summary, now, tr);
+					const trigger = h('button', {
+						ref: rootRef,
+						type: 'button',
+						style: triggerStyle(open || hovered || focused, summary.pending !== null),
+						'aria-haspopup': 'dialog',
+						'aria-expanded': open,
+						'aria-label': figures.label,
 						'data-live-turn-stats': true,
 						'data-pending': summary.pending === null ? 'false' : 'true',
 						'data-turn': summary.turn,
-						title,
+						onClick: () => setOpen(!open),
+						onPointerEnter: () => setHovered(true),
+						onPointerLeave: () => setHovered(false),
+						onFocus: () => setFocused(true),
+						onBlur: () => setFocused(false),
 					},
-						h('svg', { viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': true, style: { flex: 'none' } },
-							h('circle', { cx: 8, cy: 8, r: 5.75, fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 }),
-							h('path', { d: 'M8 4.75V8.4l2.5 1.6', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' })),
-						h('span', { style: LABEL_STYLE }, label));
+						h(ClockIcon, null),
+						h('span', { style: LABEL_STYLE }, figures.label));
+
+					if (!open) return trigger;
+					const panel = h('div', {
+						ref: panelRef,
+						role: 'dialog',
+						'aria-label': tr('Latest turn stats'),
+						'data-live-turn-stats-panel': true,
+						style: pos === null ? { ...PANEL_STYLE, ...MEASURE_STYLE } : { ...PANEL_STYLE, left: pos.left, top: pos.top },
+					},
+						h('div', { style: PANEL_TITLE_STYLE },
+							h('span', { style: PANEL_TITLE_LABEL_STYLE },
+								h(ClockIcon, null),
+								tr('Latest turn stats')),
+							h('span', { style: PANEL_TITLE_VALUE_STYLE }, tr('Turn {turn}', { turn: summary.turn }))),
+						h('div', { style: PANEL_RULE_STYLE, 'aria-hidden': true }),
+						h('dl', { style: PANEL_DETAILS_STYLE },
+							figures.rows.flatMap((row) => [
+								h('dt', { key: `${row.label}:term`, style: PANEL_TERM_STYLE }, row.label),
+								h('dd', { key: `${row.label}:value`, style: PANEL_VALUE_STYLE }, row.value),
+							])),
+						h('div', { style: PANEL_NOTE_STYLE }, tr('Latest turn only — the neighbouring pill averages the whole session.')));
+					return h(React.Fragment, null, trigger, ReactDOM.createPortal(panel, document.body));
 				}
 
 				try {
@@ -554,6 +784,8 @@ window.__ModuleLoader__.load({
 				isTokenDelta,
 				formatSeconds,
 				formatSpeed,
+				formatCount,
+				displayFigures,
 			},
 		};
 	},

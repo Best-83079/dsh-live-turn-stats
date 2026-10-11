@@ -16,7 +16,21 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 | 正在流式输出、提供方还没报 usage | `本轮 3.6秒 · 生成中 1.2秒` | TTFT 已确定；「生成中」从首 token 起计时，每秒跳动 |
 | 已拿到 usage 或本轮已结束 | `本轮 3.6秒 · 142 tok/s` | 本轮最终（或当前）的首 token 延迟与输出速度 |
 
-鼠标悬停有 `title` 提示，列出本轮 TTFT / TPS / 输出 token / 解码用时 / 步数，并注明旁边的胶囊才是全会话平均值。
+鼠标悬停时胶囊会有和自带胶囊一样的 hover 底色；**点一下会弹出详细信息窗口**（和自带「会话统计」同款：固定定位、贴在上方、越界自动夹进视口、随滚动/窗口变化重新定位、点外面或按 Esc 关闭），内容是：
+
+```
+🕐 最新一轮统计                     第 12 轮
+─────────────────────────────────────────
+首 token 延迟（TTFT）              3.6秒
+输出速度（TPS）                 142 tok/s
+输出 token                         1,234
+解码用时                          8.4秒
+步数                                  2
+
+只统计最新一轮，旁边的「会话统计」是整个会话的平均值。
+```
+
+进行中的一轮里，TTFT 行显示 `等待首字 2.3秒`、TPS 行显示 `生成中 1.2秒`，和胶囊一起每秒跳动；没有记录到的项显示「未记录」，不会瞎编。
 
 - **TTFT（本轮）**：本轮里**最早**那个同时有 `step/start` 和首 token 的 Step，`首 token 时间 − Step 开始时间`。首 token 判定与 Host 的 `@deepseek-ai/dsh-llm` 的 `isTokenDelta` 一致（非空 text / reasoning delta，或带名字或参数的工具调用 delta）。
 - **TPS（本轮）**：本轮里**同时**有首 token、解码结束时间和 provider usage 的 Step，把 `输出 token` 求和除以 `解码时间（首 token → 结算）` 求和。`解码时间` 为 0 时不显示速度。这与自带对话框对 TPS 的定义一致，只是把范围收到本轮。
@@ -81,7 +95,7 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 ## 验证
 
 1. `npm test`（离线，不需要 Harness 在跑）：
-   - `test/fold.mjs`：17 项断言覆盖流式 TTFT、usage chunk、结算后从 compact 流重建 TTFT、多 Step 轮次、重试保留更早的首 token、空轮次不上屏、窗口从中间开始、畸形 usage、陈旧 turn 事件、读缓存增量与 settle 重算、以及两个格式化函数。
+   - `test/fold.mjs`：20 项断言覆盖流式 TTFT、usage chunk、结算后从 compact 流重建 TTFT、多 Step 轮次、重试保留更早的首 token、空轮次不上屏、窗口从中间开始、畸形 usage、陈旧 turn 事件、读缓存增量与 settle 重算、格式化函数，以及**弹出窗口的每一行文字**（等待中/生成中/已结算三种状态）。
    - `test/manifest.mjs`：9 项断言覆盖包名/版本/协议、patch 文件与插入的 row 名、`exports` 指向、`dsh.client` 声明、发布文件集、引擎徽标与 peer range 一致；能自发现本机 dsh 时再跑**真实的** `evaluatePluginCompatibility`，断言当前运行时（0.2.0-rc.2）通过，且 0.1.0 / 0.3.0 会被拒（声明有效性的反向验证）。
 2. 运行中的客户端：`cordis_inspect_query`（Client `Slots`，root `conversation.composer.dock`）的 occupants 里应出现 `id: live-turn-stats`，order 0.5（紧跟 `stats`）。
 3. 视觉核对需要你自己看一眼：发一条消息，胶囊应在「等待首字 → 生成中 → 速度」之间切换；点开旁边的「会话统计」，两者数值应当不同（除非整个会话只有这一轮）。

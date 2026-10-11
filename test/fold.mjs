@@ -26,18 +26,26 @@ assert.equal(registrations.length, 1, 'client.js must register exactly one modul
 assert.equal(registrations[0].id, 'dsh-live-turn-stats', 'module id must equal the package name');
 
 const reactStub = {
+	Fragment: 'fragment',
 	createElement: () => null,
 	useCallback: (fn) => fn,
 	useEffect: () => undefined,
+	useLayoutEffect: () => undefined,
 	useMemo: (fn) => fn(),
+	useRef: (value) => ({ current: value ?? null }),
 	useState: (value) => [typeof value === 'function' ? value() : value, () => {}],
 	useSyncExternalStore: () => null,
 };
+const reactDomStub = { createPortal: () => null };
 const module_ = registrations[0].factory((spec) => {
 	if (spec === 'react') return reactStub;
+	if (spec === 'react-dom') return reactDomStub;
 	throw new Error(`unexpected require(${JSON.stringify(spec)})`);
 });
-const { foldEntries, summarise, readSummary, firstTokenTimeInStream, isTokenDelta, formatSeconds, formatSpeed } = module_.internals;
+const {
+	foldEntries, summarise, readSummary, firstTokenTimeInStream, isTokenDelta,
+	formatSeconds, formatSpeed, formatCount, displayFigures,
+} = module_.internals;
 
 /** One durable Session event as the window carries it. */
 const durable = (event) => ({ type: 'event', event });
@@ -268,6 +276,53 @@ check('formatted figures match the shipped dialog shape', () => {
 	assert.equal(formatSeconds(-5, fakeT), '0s');
 	assert.equal(formatSpeed(142.4, fakeT), '142 tok/s');
 	assert.equal(formatSpeed(3.55, fakeT), '3.6 tok/s');
+	assert.equal(formatCount(0), '0');
+	assert.equal(formatCount(1234), '1,234');
+	assert.equal(formatCount(1234567), '1,234,567');
+});
+
+check('the panel counts the wait up while the first token is pending', () => {
+	const summary = summarise(foldEntries([
+		durable(ev('turn/start', 1000, { turn: 12 })),
+		durable(ev('step/start', 1100, { turn: 12, step: 1 })),
+	]));
+	const figures = displayFigures(summary, 3300, fakeT);
+	assert.equal(figures.label, 'Turn waiting for first token 2.2s', 'the trigger and the panel share one string');
+	assert.equal(figures.rows[0].value, 'waiting for first token 2.2s');
+	assert.equal(figures.rows[1].value, 'not recorded');
+	assert.equal(figures.rows[2].value, 'not recorded');
+	assert.equal(figures.rows[3].value, 'not recorded');
+	assert.equal(figures.rows[4].value, '1');
+});
+
+check('the panel reports the settled Turn with grouped tokens', () => {
+	const summary = summarise(foldEntries([
+		durable(ev('turn/start', 1000, { turn: 12 })),
+		durable(ev('step/start', 1100, { turn: 12, step: 1 })),
+		delta(1600, 12, 1, 'He'),
+		settlement(2600, 12, 1, [], { outputTokens: 1234 }),
+		durable(ev('turn/end', 2700, { turn: 12, reason: 'success' })),
+	]));
+	const figures = displayFigures(summary, 9000, fakeT);
+	assert.equal(figures.label, 'Turn 0.5s · 1234 tok/s');
+	assert.equal(figures.live, null);
+	assert.equal(figures.rows[0].value, '0.5s');
+	assert.equal(figures.rows[1].value, '1234 tok/s');
+	assert.equal(figures.rows[2].value, '1,234');
+	assert.equal(figures.rows[3].value, '1s');
+	assert.equal(figures.rows[4].value, '1');
+});
+
+check('the panel names the generating wait before usage arrives', () => {
+	const summary = summarise(foldEntries([
+		durable(ev('turn/start', 1000, { turn: 3 })),
+		durable(ev('step/start', 1100, { turn: 3, step: 1 })),
+		delta(1600, 3, 1, 'He'),
+	]));
+	const figures = displayFigures(summary, 4000, fakeT);
+	assert.equal(figures.label, 'Turn 0.5s · generating 2.4s');
+	assert.equal(figures.rows[0].value, '0.5s');
+	assert.equal(figures.rows[1].value, 'generating 2.4s');
 });
 
 check('the read cache reuses one summary per window and follows appends', () => {
