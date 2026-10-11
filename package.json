@@ -1,0 +1,65 @@
+{
+  "name": "dsh-live-turn-stats",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Latest-Turn live TTFT and output speed for DeepSeek Harness, beside the whole-session stats pill.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Best-83079",
+  "keywords": [
+    "dsh",
+    "dsh-bundle",
+    "dsh-plugin",
+    "deepseek-harness",
+    "ttft",
+    "tps",
+    "stats"
+  ],
+  "homepage": "https://github.com/Best-83079/dsh-live-turn-stats#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Best-83079/dsh-live-turn-stats.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Best-83079/dsh-live-turn-stats/issues"
+  },
+  "scripts": {
+    "test": "node test/fold.mjs && node test/manifest.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-chat": ">=0.2.0-rc.2 <0.3.0-0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale",
+    "README.md"
+  ],
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0-rc.2 <0.3.0-0"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-chat"
+      ]
+    }
+  }
+}

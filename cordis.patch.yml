@@ -1,0 +1,5 @@
+# Inserts the latest-Turn live statistics row. The Client half (./client) renders
+# the pill in `conversation.composer.dock`; the Host half is inert.
+- insert:
+    - id: live-turn-stats
+      name: dsh-live-turn-stats

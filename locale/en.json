@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Latest turn stats",
+    "description": "A composer pill with the newest Turn's time to first token and output speed, live while it streams, instead of whole-session averages."
+  }
+}
