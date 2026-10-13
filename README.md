@@ -44,7 +44,7 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 - 结算后的 `assistant/message` 内嵌 compact 计时流（`stream`），所以**刷新页面后**（transient 行已经消失）TTFT 依然准确；
 - `usage` chunk 和 `assistant/message.usage` 给出输出 token 数。
 
-折叠只保留**最新一轮**（窗口是连续日志切片，turn 号只会往前走，旧 turn 的事件直接丢弃）。窗口只在尾部追加时（流式）沿用上一次的折叠状态，只有 prepend 或 settle 才整体重算，所以每个 chunk 到达时不会重扫整个窗口。
+折叠只保留**最新一轮**（窗口是连续日志切片，turn 号只会往前走，旧 turn 的事件直接丢弃）。只有「窗口的 revision 恰好比上次读到的大 1，且这次变更是 `append`」才沿用上一次的折叠状态——`change` 只描述一批里的**最后一次**变更，所以长度相同的 `replace`、净长度为零的 `settleAssistant`、以及夹带了这些的同批追加，都必须整体重算，否则会把它们插入的行漏掉。走快路径时只折这次发布的那几条事件，**不物化整个窗口数组**，所以每个 chunk 到达时既不重扫也不重读整个窗口。
 
 `Date.now()` 只用于把「等待/生成中」的已用时跳出来；事件时刻来自 Host（本地 Web GUI 是同一台机器）。
 
@@ -95,7 +95,7 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 ## 验证
 
 1. `npm test`（离线，不需要 Harness 在跑）：
-   - `test/fold.mjs`：20 项断言覆盖流式 TTFT、usage chunk、结算后从 compact 流重建 TTFT、多 Step 轮次、重试保留更早的首 token、空轮次不上屏、窗口从中间开始、畸形 usage、陈旧 turn 事件、读缓存增量与 settle 重算、格式化函数，以及**弹出窗口的每一行文字**（等待中/生成中/已结算三种状态）。
+   - `test/fold.mjs`：24 项断言覆盖流式 TTFT、usage chunk、结算后从 compact 流重建 TTFT、多 Step 轮次、重试保留更早的首 token、空轮次不上屏、窗口从中间开始、畸形 usage、陈旧 turn 事件、读缓存增量与 settle 重算、**同一批里 settle + append 必须整体重算**、**追加路径不重新物化窗口**、**没有 `step/start` 的 Step 按「已出 token」而不是「等待首字」处理**、格式化函数，以及**弹出窗口的每一行文字**（等待中/生成中/已结算三种状态）。
    - `test/manifest.mjs`：9 项断言覆盖包名/版本/协议、patch 文件与插入的 row 名、`exports` 指向、`dsh.client` 声明、发布文件集、引擎徽标与 peer range 一致；能自发现本机 dsh 时再跑**真实的** `evaluatePluginCompatibility`，断言当前运行时（0.2.0-rc.2）通过，且 0.1.0 / 0.3.0 会被拒（声明有效性的反向验证）。
 2. 运行中的客户端：`cordis_inspect_query`（Client `Slots`，root `conversation.composer.dock`）的 occupants 里应出现 `id: live-turn-stats`，order 0.5（紧跟 `stats`）。
 3. 视觉核对需要你自己看一眼：发一条消息，胶囊应在「等待首字 → 生成中 → 速度」之间切换；点开旁边的「会话统计」，两者数值应当不同（除非整个会话只有这一轮）。
@@ -103,5 +103,6 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 ## 局限
 
 - 只在最新一轮**已经产生过 token** 或**正在进行中**时显示；最新一轮直接失败/取消且没有任何输出时胶囊隐藏（不会把上一轮的数字冒充成「本轮」）。
+- 窗口从**某个 Step 的 `step/start` 之后**开始载入时，那个 Step 没有起点，TTFT 算不出来：此时仍显示它的 token 数与速度（TTFT 行写「未记录」），不会把它说成「等待首字」。要精确的 TTFT 需要窗口覆盖到该 Step 的 `step/start`。
 - tick 用的是浏览器时钟与 Host 事件时刻的差；本地同一台机器没问题，跨机器（Host 在远端）时这个差值会带上时钟偏差。
 - 不支持把行**插进**自带「会话统计」对话框：那个对话框不是插槽，唯一的加法是整格替换 `conversation.composer.dock` 里 id 为 `stats` 的条目，会连带覆盖自带的用量胶囊，得不偿失。所以这里是并排的独立胶囊。

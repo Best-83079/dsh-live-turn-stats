@@ -353,6 +353,107 @@ check('the read cache reuses one summary per window and follows appends', () => 
 	assert.deepEqual(third, summarise(foldEntries(settled)));
 });
 
+check('a settle and an append in one batch refold instead of skipping the settlement', () => {
+	const base = [
+		durable(ev('turn/start', 1000, { turn: 7 })),
+		durable(ev('step/start', 1100, { turn: 7, step: 1 })),
+		delta(1400, 7, 1, 'He'),
+	];
+	let window = { entries: base, hasMore: false, revision: 1, change: { kind: 'replace', entries: base } };
+	const source = { getSnapshot: () => window, subscribe: () => () => {} };
+	assert.equal(readSummary(source).pending, 'generating');
+
+	// One publish batch: the attempt settles (its transient row is retired and its
+	// durable row inserted, a net-zero length change) and the Turn then ends. The
+	// snapshot's `change` names only the append, so a length comparison alone would
+	// resume the fold past the settlement and lose its tokens and decode window.
+	const stream = [{ type: 'text-chunks', time0: 1600, index: 0, dt: [0], texts: ['He'] }];
+	const settled = [
+		base[0],
+		base[1],
+		settlement(2700, 7, 1, stream, { outputTokens: 40 }),
+		durable(ev('turn/end', 2800, { turn: 7, reason: 'success' })),
+	];
+	window = { entries: settled, hasMore: false, revision: 3, change: { kind: 'append', entries: [settled[3]] } };
+	const summary = readSummary(source);
+	assert.deepEqual(summary, summarise(foldEntries(settled)), 'the whole window must be folded');
+	assert.equal(summary.ttftMs, 500, 'the durable stream carries the Step latency');
+	assert.equal(summary.decodeTokens, 40, 'the settled usage is not skipped');
+	assert.equal(summary.tokenSteps, 1);
+	assert.equal(summary.tps, 40 / 1.1);
+});
+
+check('the tail fast path reads only the published delta', () => {
+	const base = [
+		durable(ev('turn/start', 1000, { turn: 7 })),
+		durable(ev('step/start', 1100, { turn: 7, step: 1 })),
+	];
+	const appended = [delta(1600, 7, 1, 'He')];
+	let materialized = 0;
+	let window = {
+		get entries() { materialized += 1; return base; },
+		hasMore: false,
+		revision: 1,
+		change: { kind: 'replace', entries: base },
+	};
+	const source = { getSnapshot: () => window, subscribe: () => () => {} };
+	readSummary(source);
+	assert.equal(materialized, 1, 'the first read materializes the window once');
+	window = {
+		get entries() { materialized += 1; return base.concat(appended); },
+		hasMore: false,
+		revision: 2,
+		change: { kind: 'append', entries: appended },
+	};
+	const summary = readSummary(source);
+	assert.equal(materialized, 1, 'an append must not re-materialize the whole window');
+	assert.equal(summary.ttftMs, 500);
+	assert.equal(summary.pending, 'generating');
+});
+
+check('a Step without its step/start boundary counts as output, never as waiting', () => {
+	// Only reachable when the loaded window begins between `step/start` and the
+	// first token: the Step has no start, so no latency can be claimed — but its
+	// tokens are real and the pill must not say "waiting for first token".
+	const generating = summarise(foldEntries([delta(1000, 5, 2, 'streaming')]));
+	assert.equal(generating.ttftMs, null);
+	assert.equal(generating.pending, 'generating');
+	const live = displayFigures(generating, 3000, fakeT);
+	assert.equal(live.label, 'Turn generating 2s');
+	assert.equal(live.rows[0].value, 'not recorded');
+	assert.equal(live.rows[1].value, 'generating 2s');
+
+	const settled = summarise(foldEntries([
+		delta(1000, 5, 2, 'streaming'),
+		usageChunk(2000, 5, 2, 50),
+	]));
+	assert.equal(settled.pending, null);
+	assert.equal(settled.decodeTokens, 50);
+	assert.equal(settled.tps, 50);
+	const figures = displayFigures(settled, 3000, fakeT);
+	assert.equal(figures.label, 'Turn 50 tok/s');
+	assert.equal(figures.rows[0].value, 'not recorded');
+	assert.equal(figures.rows[1].value, '50 tok/s');
+});
+
+check('a finished Turn with output but no Step boundary is reported, not hidden', () => {
+	const settled = [
+		durable(ev('assistant/message', 2000, {
+			turn: 5,
+			step: 2,
+			message: { id: 'm', content: [] },
+			usage: { outputTokens: 50 },
+			stream: [{ type: 'chunk', time: 1500, chunk: { type: 'text-delta', index: 0, text: 'x' } }],
+		})),
+		durable(ev('turn/end', 2100, { turn: 5, reason: 'success' })),
+	];
+	const summary = summarise(foldEntries(settled));
+	assert.notEqual(summary, null, 'the Turn produced output, so it is not nothing');
+	assert.equal(summary.closed, true);
+	assert.equal(summary.ttftMs, null);
+	assert.equal(summary.decodeTokens, 50);
+});
+
 if (process.exitCode === 1) {
 	console.error(`\n${checks.length} check(s) passed before the failures above.`);
 } else {

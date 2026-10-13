@@ -268,7 +268,7 @@ window.__ModuleLoader__.load({
 
 		/** Empty accumulator: only the newest Turn is ever described. */
 		function createFold() {
-			return { entries: null, index: 0, turn: null };
+			return { turn: null };
 		}
 
 		/**
@@ -372,7 +372,6 @@ window.__ModuleLoader__.load({
 		 * @returns the same accumulator.
 		 */
 		function foldInto(fold, entries, from) {
-			fold.entries = entries;
 			for (let index = from; index < entries.length; index += 1) {
 				const entry = entries[index];
 				if (entry === null || typeof entry !== 'object') continue;
@@ -380,7 +379,6 @@ window.__ModuleLoader__.load({
 				if (event === null || typeof event !== 'object') continue;
 				applyEvent(fold, event);
 			}
-			fold.index = entries.length;
 			return fold;
 		}
 
@@ -394,12 +392,33 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * Describe the newest Turn, or nothing when it carries no first token yet
-		 * and can no longer gain one.
+		 * Fold one append batch into the accumulator. A consecutive-revision append
+		 * carries exactly the entries that arrived, so the window's own entry array
+		 * never has to be materialized — the whole point of the tail fast path.
+		 * @param fold - accumulator to extend.
+		 * @param entries - the published append delta.
+		 * @returns the same accumulator.
+		 */
+		function foldAppended(fold, entries) {
+			for (const entry of entries) {
+				if (entry === null || typeof entry !== 'object') continue;
+				const event = entry.event;
+				if (event === null || typeof event !== 'object') continue;
+				applyEvent(fold, event);
+			}
+			return fold;
+		}
+
+		/**
+		 * Describe the newest Turn, or nothing when it produced no output at all
+		 * and can no longer gain any.
 		 *
 		 * `pending` names the live state the pill counts up: `awaiting` until the
 		 * Turn's first token lands, `generating` while the answer streams before
 		 * any attempt reported usage, and null once a real figure can be shown.
+		 * A Step whose `step/start` is outside the window never yields a latency,
+		 * but its tokens still count — the pill must not call that "waiting for the
+		 * first token" while it is visibly streaming.
 		 * @param fold - folded accumulator.
 		 * @returns display-ready newest-Turn figures, or null.
 		 */
@@ -412,9 +431,14 @@ window.__ModuleLoader__.load({
 			let decodeTokens = 0;
 			let tokenSteps = 0;
 			for (const step of turn.steps) {
+				// The first token's instant is tracked on its own: a Step whose
+				// `step/start` fell outside the window still proves output started,
+				// even though it can never yield a latency.
+				if (step.firstTokenTime !== null && (firstTokenAt === null || step.firstTokenTime < firstTokenAt)) {
+					firstTokenAt = step.firstTokenTime;
+				}
 				if (ttftMs === null && step.startTime !== null && step.firstTokenTime !== null) {
 					ttftMs = Math.max(0, step.firstTokenTime - step.startTime);
-					firstTokenAt = step.firstTokenTime;
 				}
 				if (step.firstTokenTime !== null && step.decodeEndTime !== null && step.outputTokens !== null) {
 					decodeMs += Math.max(0, step.decodeEndTime - step.firstTokenTime);
@@ -422,9 +446,9 @@ window.__ModuleLoader__.load({
 					tokenSteps += 1;
 				}
 			}
-			// A closed Turn that never produced a token has nothing to report, and a
+			// Only a Turn that produced no output at all has nothing to report; a
 			// stale figure from an earlier Turn would be a lie about "本轮".
-			if (ttftMs === null && turn.closed) return null;
+			if (firstTokenAt === null && turn.closed) return null;
 			const newest = turn.steps.length === 0 ? null : turn.steps[turn.steps.length - 1];
 			return {
 				turn: turn.turn,
@@ -436,8 +460,8 @@ window.__ModuleLoader__.load({
 				decodeTokens,
 				tokenSteps,
 				tps: decodeMs > 0 ? decodeTokens / (decodeMs / 1000) : null,
-				awaitingSince: ttftMs !== null ? null : (newest !== null && newest.startTime !== null ? newest.startTime : turn.startedAt),
-				pending: ttftMs === null ? 'awaiting' : tokenSteps === 0 && !turn.closed ? 'generating' : null,
+				awaitingSince: firstTokenAt !== null ? null : (newest !== null && newest.startTime !== null ? newest.startTime : turn.startedAt),
+				pending: firstTokenAt === null ? 'awaiting' : tokenSteps === 0 && !turn.closed ? 'generating' : null,
 			};
 		}
 
@@ -447,7 +471,14 @@ window.__ModuleLoader__.load({
 		/**
 		 * Read one Session's newest-Turn figures, reusing the folded accumulator
 		 * when the window only grew at its tail (the streaming case) and refolding
-		 * when history was prepended or a settled attempt replaced its live rows.
+		 * when history was prepended, an attempt settled, or the window was rebased.
+		 *
+		 * The tail fast path requires the window's revision to be exactly one ahead
+		 * of the window last read. `change` describes only the newest mutation of a
+		 * batch, so a length comparison cannot tell a pure append from a batch that
+		 * also retired an attempt's live rows (`settleAssistant`, a net-zero length
+		 * change) or re-installed a window of the same length; resuming the fold
+		 * across such a batch would silently skip the rows it inserted.
 		 * @param source - the Session's event source.
 		 * @returns display-ready figures, or null.
 		 */
@@ -455,12 +486,19 @@ window.__ModuleLoader__.load({
 			const window = source.getSnapshot();
 			const cached = summaries.get(source);
 			if (cached !== undefined && cached.window === window) return cached.summary;
-			const entries = window !== null && typeof window === 'object' && Array.isArray(window.entries) ? window.entries : [];
 			const change = window !== null && typeof window === 'object' ? window.change : null;
 			const appended = cached !== undefined
 				&& change !== null && typeof change === 'object' && change.kind === 'append' && Array.isArray(change.entries)
-				&& entries.length === cached.window.entries.length + change.entries.length;
-			const fold = appended ? foldInto(cached.fold, entries, cached.fold.index) : foldEntries(entries);
+				&& typeof window.revision === 'number' && cached.window.revision === window.revision - 1;
+			let fold;
+			if (appended) {
+				fold = foldAppended(cached.fold, change.entries);
+			} else {
+				// Read the window's entries exactly once: the getter materializes the
+				// whole window, so probing it twice would double that cost.
+				const entries = window !== null && typeof window === 'object' ? window.entries : undefined;
+				fold = foldEntries(Array.isArray(entries) ? entries : []);
+			}
 			const summary = summarise(fold);
 			summaries.set(source, { window, fold, summary });
 			return summary;
@@ -536,9 +574,30 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * Place a fixed panel above its trigger, clamped into the viewport, and keep
-		 * it there while the page scrolls or the window resizes — the shipped stat
-		 * dialog's own anchoring, without its primitives package.
+		 * The margin the panel's top edge is clamped to. The desktop frame reserves
+		 * a strip above the page, and the shipped dialog's own overlay helper widens
+		 * the margin to clear it; a fullscreen frame keeps the plain margin.
+		 * @param min - the plain margin.
+		 * @returns the top margin to clamp to.
+		 */
+		function overlayTopMargin(min) {
+			try {
+				const root = document.documentElement;
+				const clearance = Number.parseFloat(
+					window.getComputedStyle(root).getPropertyValue('--dsh-frame-top-clearance'),
+				);
+				if (Number.isNaN(clearance)) return min;
+				return Math.max(min, (root.hasAttribute('data-fullscreen') ? 0 : clearance) + 20);
+			} catch {
+				return min;
+			}
+		}
+
+		/**
+		 * Place a fixed panel above its trigger, clamped into the viewport and clear
+		 * of the frame's reserved strip, and keep it there while the page scrolls,
+		 * the window resizes, or the panel's own content changes size — the shipped
+		 * stat dialog's own anchoring, without its primitives package.
 		 * @param open - whether the panel is mounted.
 		 * @param anchorRef - ref of the trigger.
 		 * @param panelRef - ref of the panel.
@@ -565,11 +624,12 @@ window.__ModuleLoader__.load({
 					);
 					const above = trigger.top - rect.height - PANEL_GAP;
 					const below = trigger.bottom + PANEL_GAP;
-					const top = above >= PANEL_MARGIN
-						? above
-						: below + rect.height + PANEL_MARGIN <= window.innerHeight
-							? below
-							: Math.max(PANEL_MARGIN, window.innerHeight - rect.height - PANEL_MARGIN);
+					// Prefer sitting above the trigger; drop below it when that would
+					// cross the frame's reserved top strip; then clamp into the viewport
+					// with the shipped overlay helper's own formula.
+					const topMargin = overlayTopMargin(PANEL_MARGIN);
+					const floor = window.innerHeight - rect.height - PANEL_MARGIN;
+					const top = Math.min(Math.max(above >= topMargin ? above : below, topMargin), floor);
 					setPos({ left: Math.round(left), top: Math.round(top) });
 				};
 				place();
@@ -577,10 +637,20 @@ window.__ModuleLoader__.load({
 					window.cancelAnimationFrame(frame);
 					frame = window.requestAnimationFrame(place);
 				};
+				// The panel is `max-content` wide and its live rows tick every second,
+				// so a content-driven size change has to re-place it too — not only a
+				// viewport change. Measuring keeps the final width, so placing does not
+				// resize it and the observer cannot loop.
+				let observer;
+				if (typeof ResizeObserver !== 'undefined') {
+					observer = new ResizeObserver(onViewportChange);
+					if (panelRef.current !== null) observer.observe(panelRef.current);
+				}
 				window.addEventListener('resize', onViewportChange);
 				window.addEventListener('scroll', onViewportChange, true);
 				return () => {
 					window.cancelAnimationFrame(frame);
+					if (observer !== undefined) observer.disconnect();
 					window.removeEventListener('resize', onViewportChange);
 					window.removeEventListener('scroll', onViewportChange, true);
 				};
