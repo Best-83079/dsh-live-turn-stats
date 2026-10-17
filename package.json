@@ -2,7 +2,7 @@
   "name": "dsh-live-turn-stats",
   "version": "1.2.0",
   "private": true,
-  "description": "Latest-Turn live TTFT and output speed for DeepSeek Harness, beside the whole-session stats pill.",
+  "description": "Latest-Turn live TTFT and output speed for DeepSeek Harness, beside the whole-session statistics.",
   "type": "module",
   "license": "MIT",
   "author": "Best-83079",
@@ -25,6 +25,9 @@
   },
   "scripts": {
     "test": "node test/fold.mjs && node test/manifest.mjs"
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh": ">=0.2.0-rc.2 <0.3.0-0",

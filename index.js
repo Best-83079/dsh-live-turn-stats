@@ -5,8 +5,8 @@
  * totals from a Host projection; this bundle answers the narrower question with
  * data the browser already has, so the Host registers nothing.
  *
- * `./client` registers one pill in `conversation.composer.dock` beside the
- * shipped session-stats pill and folds the current Session's event window into
+ * `./client` registers one pill in `conversation.composer.dock` after the
+ * shipped session statistics and folds the current Session's event window into
  * the newest Turn's first-token latency and decode throughput.
  */
 export function apply() {}

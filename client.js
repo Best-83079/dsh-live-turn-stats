@@ -1,10 +1,16 @@
 /**
  * Latest-Turn live statistics pill.
  *
- * The shipped session-stats pill reports whole-session averages: its TTFT is
- * `ttftMs / ttftSteps` over every Step in the log, and its TPS divides every
+ * The shipped composer statistics report whole-session averages: their TTFT is
+ * `ttftMs / ttftSteps` over every Step in the log, and their TPS divides every
  * token ever reported by every decode window ever recorded. That answers "how
  * is this session doing", not "how is this answer doing".
+ *
+ * Since dsh 0.2.1 those shipped figures are two `conversation.composer.dock`
+ * entries rather than one: `activity` (order 0 — Turn and Step counts with the
+ * session's output speed, TTFT, LLM time, and Tool time) and `usage` (order 1 —
+ * whole-log token total and cache hit). Earlier releases registered a single
+ * `stats` entry that rendered both readings inside itself.
  *
  * This pill answers the second question from data the browser already has. It
  * subscribes to the current Session's contiguous event window
@@ -117,7 +123,7 @@ window.__ModuleLoader__.load({
 				fontVariantNumeric: 'tabular-nums',
 				whiteSpace: 'nowrap',
 				border: 'none',
-				borderRadius: 999,
+				borderRadius: 'var(--dsw-radius-sm, 8px)',
 				cursor: 'pointer',
 				display: 'inline-flex',
 				alignItems: 'center',
@@ -831,9 +837,12 @@ window.__ModuleLoader__.load({
 					ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
 						name: 'conversation.composer.dock',
 						id: 'live-turn-stats',
-						// The shipped session-stats cell is order 0, so this lands
-						// immediately beside it, before the cost meters.
-						order: 0.5,
+						// The shipped readings are `activity` (order 0) and `usage`
+						// (order 1) since dsh 0.2.1, so 1.5 lands after both of them —
+						// and still before the cost meters, which order higher. On older
+						// releases the single `stats` entry occupied order 0, so 1.5 sat
+						// after it as well.
+						order: 1.5,
 						locale: NS,
 					}, LiveTurnPill));
 				} catch (error) {

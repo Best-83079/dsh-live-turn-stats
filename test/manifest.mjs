@@ -88,10 +88,17 @@ check('the published file set covers everything the runtime reads', () => {
 	assert.deepEqual(readdirSync(join(root, 'locale')).sort(), ['en.json', 'zh.json']);
 });
 
-check('the engine badge and the enforced peer range agree', () => {
+check('the top-level engines.dsh range restates the enforced peer range', () => {
+	// Since dsh 0.2.1 `evaluatePluginCompatibility` reads an own top-level
+	// `engines.dsh` FIRST and only falls back to peerDependencies when that is
+	// absent, and dshmarket lists on the same field. The two must agree.
 	assert.equal(typeof declaredRange, 'string');
 	assert.ok(declaredRange.trim() !== '');
-	assert.equal(manifest.dsh.engines.dsh, declaredRange, 'dsh.engines.dsh is what the market badge shows; it must not contradict the gate');
+	assert.equal(manifest.engines.dsh, declaredRange, 'top-level engines.dsh must not contradict the gate');
+});
+
+check('the dsh.engines badge copy agrees with it too', () => {
+	assert.equal(manifest.dsh.engines.dsh, declaredRange, 'the badge copy must not contradict the gate');
 });
 
 // ---------------------------------------------------------------------------
@@ -108,6 +115,24 @@ function appBootCandidates() {
 		for (let depth = 0; depth < 6; depth += 1) {
 			candidates.push(join(dir, 'node_modules', '@deepseek-ai', 'dsh-app-boot'));
 			dir = dirname(dir);
+		}
+	}
+	// A Desktop install keeps every runtime it manages under
+	// <appData>/DSH/data/versions; those are the runtimes this bundle actually
+	// loads into, so they outrank a global npm install that may sit on an older
+	// release. Newest name first, numerically.
+	const desktopVersions = process.env.APPDATA === undefined
+		? undefined
+		: join(process.env.APPDATA, 'DSH', 'data', 'versions');
+	if (desktopVersions !== undefined && existsSync(desktopVersions)) {
+		let names = [];
+		try {
+			names = readdirSync(desktopVersions);
+		} catch {
+			// An unreadable versions directory just skips this source.
+		}
+		for (const name of names.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))) {
+			candidates.push(join(desktopVersions, name, 'node_modules', '@deepseek-ai', 'dsh-app-boot'));
 		}
 	}
 	const globalRoots = [
@@ -131,6 +156,7 @@ if (appBoot === null) {
 	try {
 		const gate = await import(pathToFileURL(join(appBoot, 'lib', 'index.js')).href);
 		const runtime = gate.getDshRuntimeVersion();
+		console.log(`host compatibility gate: ${appBoot} (dsh ${runtime})`);
 		check(`the installed dsh ${runtime} satisfies ${declaredRange}`, () => {
 			const issue = gate.evaluatePluginCompatibility(manifest, {}, runtime);
 			assert.equal(issue, undefined, issue === undefined ? '' : `peers refused: ${JSON.stringify(issue.peers)}`);

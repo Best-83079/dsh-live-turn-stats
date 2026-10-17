@@ -2,13 +2,15 @@
 
 一个 DeepSeek Harness（dsh）Web 客户端插件：在输入框下方的胶囊行里加一个**只看最新一轮对话**的实时统计——首 token 延迟（TTFT）和输出速度（TPS）。
 
-> A DSH web-client bundle that adds one composer pill for the **newest turn only**: live time-to-first-token and output speed, instead of the whole-session averages the shipped session-stats pill shows. Requires dsh `>=0.2.0-rc.2 <0.3.0-0`.
+> A DSH web-client bundle that adds one composer pill for the **newest turn only**: live time-to-first-token and output speed, instead of the whole-session averages the shipped composer statistics show. Requires dsh `>=0.2.0-rc.2 <0.3.0-0`; developed and verified against dsh 0.2.0-rc.2 and 0.2.1-rc.1.
 
 dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 `ttftMs / ttftSteps`（日志里每个 Step 的平均），TPS 是全会话所有 token 除以所有解码时间。它回答的是「这个会话整体怎么样」，不是「这次回答怎么样」。这个插件补的就是后者。
 
+> dsh 0.2.1 把这份自带统计从一条 `conversation.composer.dock` 条目拆成了两条：`activity`（order 0，轮次/步数 + 会话级输出速度，TTFT、LLM 时间、工具时间）和 `usage`（order 1，全会话 token 总数与缓存命中）。本插件注册 order 1.5，排在**这两条之后**——和 0.2.0-rc.2 时代（当时只有一条 `stats`，order 0）一样，始终跟在整组自带统计后面。
+
 ## 显示什么
 
-胶囊长这样（顺序紧跟在原有「会话统计」胶囊之后）：
+胶囊长这样（顺序排在自带的会话统计之后）：
 
 | 状态 | 胶囊文字 | 含义 |
 |---|---|---|
@@ -78,6 +80,9 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 声明在 `package.json` 的 **`peerDependencies`** 上——这是 dsh 唯一**强制执行**的地方（`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility` 拿运行时版本逐个校验 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 的 range）：
 
 ```json
+"engines": {
+  "dsh": ">=0.2.0-rc.2 <0.3.0-0"
+},
 "peerDependencies": {
   "@deepseek-ai/dsh": ">=0.2.0-rc.2 <0.3.0-0",
   "@deepseek-ai/dsh-api-session-controller": ">=0.2.0-rc.2 <0.3.0-0",
@@ -86,9 +91,9 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 }
 ```
 
-- 含义：**dsh 0.2.x（rc.2 及以后）可用**；0.1.x 和 0.3.0 起的版本会被网关拒绝安装/激活，并提示需要「精确版本豁免」。本插件开发与实测的运行时是 **dsh 0.2.0-rc.2**。
+- 含义：**dsh 0.2.x（rc.2 及以后）可用**；0.1.x 和 0.3.0 起的版本会被网关拒绝安装/激活，并提示需要「精确版本豁免」。本插件开发与实测的运行时是 **dsh 0.2.0-rc.2 与 0.2.1-rc.1**。
 - 除 `@deepseek-ai/dsh` 外，还声明了它真正用到的三个包的客户端半（会话事件窗口、locale、`conversation.composer.dock` 插槽的拥有者），所以某个包被改名或拆包时会被拦下，而不是运行时静默失效。
-- `dsh.engines.dsh` 是同一范围的声明式副本：插件市场（dshmarket）的「宿主要求」徽标读的是它（顶层 `engines.dsh` 也认，两者都在时以顶层为准）。测试会断言两者一致，不会出现「徽标说兼容、网关说拒绝」。
+- **顶层 `engines.dsh` 是 0.2.1 起真正被读的那一份**：`evaluatePluginCompatibility` 只在没有顶层 `engines.dsh` 时才回退去看 `peerDependencies`；dshmarket 的列表也按顶层 `engines.dsh` 判兼容性。`dsh.engines.dsh` 保留为同一范围的徽标副本，两者都在时以顶层为准——`test/manifest.mjs` 断言两者一致，不会出现「徽标说兼容、网关说拒绝」。
 - 升级到 0.3.x 后想先用着，可以走豁免：`plugin_manager` 的 `set_version_exemption`（或 `dsh plugin allow-version`），风险自负。
 - 本插件声明 `"private": true`（防止误发 npm）。如果你要发到 npm 让「添加插件」支持包名安装，删掉这一行即可——包名 `dsh-live-turn-stats` 目前未被占用。
 
@@ -96,13 +101,14 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
 
 1. `npm test`（离线，不需要 Harness 在跑）：
    - `test/fold.mjs`：24 项断言覆盖流式 TTFT、usage chunk、结算后从 compact 流重建 TTFT、多 Step 轮次、重试保留更早的首 token、空轮次不上屏、窗口从中间开始、畸形 usage、陈旧 turn 事件、读缓存增量与 settle 重算、**同一批里 settle + append 必须整体重算**、**追加路径不重新物化窗口**、**没有 `step/start` 的 Step 按「已出 token」而不是「等待首字」处理**、格式化函数，以及**弹出窗口的每一行文字**（等待中/生成中/已结算三种状态）。
-   - `test/manifest.mjs`：9 项断言覆盖包名/版本/协议、patch 文件与插入的 row 名、`exports` 指向、`dsh.client` 声明、发布文件集、引擎徽标与 peer range 一致；能自发现本机 dsh 时再跑**真实的** `evaluatePluginCompatibility`，断言当前运行时（0.2.0-rc.2）通过，且 0.1.0 / 0.3.0 会被拒（声明有效性的反向验证）。
-2. 运行中的客户端：`cordis_inspect_query`（Client `Slots`，root `conversation.composer.dock`）的 occupants 里应出现 `id: live-turn-stats`，order 0.5（紧跟 `stats`）。
-3. 视觉核对需要你自己看一眼：发一条消息，胶囊应在「等待首字 → 生成中 → 速度」之间切换；点开旁边的「会话统计」，两者数值应当不同（除非整个会话只有这一轮）。
+   - `test/manifest.mjs`：10 项断言覆盖包名/版本/协议、patch 文件与插入的 row 名、`exports` 指向、`dsh.client` 声明、发布文件集、顶层 `engines.dsh` 与 `dsh.engines.dsh` 都与 peer range 一致；能自发现本机 dsh 时再跑**真实的** `evaluatePluginCompatibility`，断言当前运行时通过，且 0.1.0 / 0.3.0 会被拒（声明有效性的反向验证）。
+2. 运行中的客户端：`cordis_inspect_query`（Client `Slots`，root `conversation.composer.dock`）的 occupants 里应出现 `id: live-turn-stats`，order 1.5（排在 `activity` 与 `usage` 之后）。
+3. 视觉核对需要你自己看一眼：发一条消息，胶囊应在「等待首字 → 生成中 → 速度」之间切换；点开自带的会话统计（0.2.1 起是 `activity` 胶囊），两者数值应当不同（除非整个会话只有这一轮）。
 
 ## 局限
 
 - 只在最新一轮**已经产生过 token** 或**正在进行中**时显示；最新一轮直接失败/取消且没有任何输出时胶囊隐藏（不会把上一轮的数字冒充成「本轮」）。
 - 窗口从**某个 Step 的 `step/start` 之后**开始载入时，那个 Step 没有起点，TTFT 算不出来：此时仍显示它的 token 数与速度（TTFT 行写「未记录」），不会把它说成「等待首字」。要精确的 TTFT 需要窗口覆盖到该 Step 的 `step/start`。
 - tick 用的是浏览器时钟与 Host 事件时刻的差；本地同一台机器没问题，跨机器（Host 在远端）时这个差值会带上时钟偏差。
-- 不支持把行**插进**自带「会话统计」对话框：那个对话框不是插槽，唯一的加法是整格替换 `conversation.composer.dock` 里 id 为 `stats` 的条目，会连带覆盖自带的用量胶囊，得不偿失。所以这里是并排的独立胶囊。
+- 不支持把行**插进**自带「会话统计」对话框：那个对话框不是插槽，唯一的加法是整格替换 `conversation.composer.dock` 里的自带条目——0.2.1 起它们是 `activity` 与 `usage` 两条（此前是一条 `stats`），而替换会连带覆盖自带的用量胶囊，得不偿失。所以这里是并排的独立胶囊。
+- 胶囊圆角跟随自带的 `--dsw-radius-sm`；0.2.0-rc.2 时代自带胶囊是 `999px` 胶囊形，0.2.1-rc.1 起是 8px 圆角，本插件的样式随之统一。
