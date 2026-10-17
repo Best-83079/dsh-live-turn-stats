@@ -60,7 +60,7 @@ dsh 自带的「会话统计」是整个会话的平均值——它的 TTFT 是 
    https://github.com/Best-83079/dsh-live-turn-stats
    ```
 
-   （`github:Best-83079/dsh-live-turn-stats` 也可以；带分支或 tag 就写 `...#v1.2.0`。）
+   （`github:Best-83079/dsh-live-turn-stats` 也可以；带分支或 tag 就写 `...#v1.2.1`。）
 
 2. **CLI**：直接让 dsh 的 pnpm 层装进某个 profile：
 

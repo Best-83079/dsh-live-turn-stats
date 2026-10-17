@@ -1,6 +1,6 @@
 {
   "name": "dsh-live-turn-stats",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Latest-Turn live TTFT and output speed for DeepSeek Harness, beside the whole-session statistics.",
   "type": "module",
